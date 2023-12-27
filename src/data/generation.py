@@ -8,8 +8,10 @@ import h5py
 from ..utils.utils import read_config
 import argparse
 import textwrap
+import os
+from typing import Optional
 
-def generate_data(n: int, dim:int, h5path: str, noise_params: dict=None) -> None:
+def generate_data(n: int, dim:int, h5path: str, noise_params: Optional[dict]=None, verbose: bool=True) -> None:
     """generate n events and store them in h5path
     :param n: number of events to generate
     :param dim: dimension of the data
@@ -36,14 +38,18 @@ def generate_data(n: int, dim:int, h5path: str, noise_params: dict=None) -> None
     if noise_params is not None:
         y += np.random.normal(noise_params["mean"], noise_params["std"], size=y.shape)
 
-    print("x.shape", x.shape)
-    print("y.shape", y.shape)
+    if verbose:
+        print("x.shape", x.shape)
+        print("y.shape", y.shape)
 
+    # make sure directory exists
+    os.makedirs(os.path.dirname(h5path), exist_ok=True)
     # store data in h5path
     with h5py.File(h5path, "w") as hf:
         hf.create_dataset("x", data=x)
         hf.create_dataset("y", data=y)
-        print("data stored in", h5path)
+        if verbose:
+            print("data stored in", h5path)
 
 def main() -> None:
     """Generate data with params from config file and export as h5"""
