@@ -7,6 +7,7 @@ import lightning as L
 import h5py
 from torchvision import transforms
 torch.set_float32_matmul_precision("medium")
+import numpy as np
 
 def h5_to_dataset(h5path: str) -> Dataset:
     """Read data from h5path and return a Dataset object.
@@ -39,7 +40,7 @@ class CustomDataset(Dataset):
 
     def normalize_x(self, x: torch.Tensor) -> torch.Tensor:
         return x
-        return (x - self.x_mean) / self.x_std
+        # return (x - self.x_mean) / self.x_std
 
     def unnormalize_x(self, x: torch.Tensor) -> torch.Tensor:
         return x * self.x_std + self.x_mean
@@ -61,7 +62,7 @@ class SimpleFC_Lit(L.LightningModule):
     def __init__(self, hparams: dict, verbose: bool=True) -> None:
         super().__init__()
         self.verbose = verbose
-        self.save_hyperparameters()
+        self.save_hyperparameters(hparams)
         self.batch_size = hparams["batch_size"]
         self.lr = hparams["lr"]
 
@@ -88,21 +89,18 @@ class SimpleFC_Lit(L.LightningModule):
         nn.init.zeros_(self.skip.bias)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass"""
-        # x_skip = self.skip(x)
-        # x_skip = self.skip_bn(x_skip)
-        # x_skip = self.dropout(x_skip)
+        """Forward pass
+        model(x)
+        """
         for layer in self.linear_layers[:-1]:
             x = self.activation(layer(x))
-            # x = self.dropout(x)
-        # x += x_skip
         x = self.linear_layers[-1](x)  # last layer has no activation
         return x
 
     def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         """Training step"""
         x, y = batch
-        y_hat = self(x)
+        y_hat = self(x)  # self.forward(x)
         loss = self.loss(y_hat, y)
         self.log("train_loss", loss)
         return loss
@@ -131,24 +129,43 @@ class SimpleFC_Lit(L.LightningModule):
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.1, patience=10, verbose=True)
         return {"optimizer": optimizer, "lr_scheduler": scheduler, "monitor": "val_loss"}
 
-    def setup(self, stage: str) -> None:
+    def setup(self, stage: str = None) -> None:
         """Called at the beginning of fit and test."""
-        if stage == "fit":
-            self.train_dataset = h5_to_dataset(self.hparams["hparams"]["train_path"])
-            self.val_dataset = h5_to_dataset(self.hparams["hparams"]["val_path"])
-        elif stage == "test":
-            self.test_dataset = h5_to_dataset(self.hparams["hparams"]["test_path"])
+        print("setup stage")
+        train_path = self.hparams["train_path"]
+        with h5py.File(train_path, "r") as hf:
+            x = hf["Set1/GImp"][:]
+            y = hf["Set1/SImp"][:]
+        print(x.shape)
+        print(y.shape)
+        print("x[0]", x[0])
+        # convert from complex to two real numbers and then concatenate
+        x = np.concatenate((x.real, x.imag), axis=1)
+        y = np.concatenate((y.real, y.imag), axis=1)
 
+        print(x.shape)
+        print(y.shape)
+        print("x[0]", x[0])
 
-        if self.verbose:
-            print("setup stage:", stage)
-            if stage == "fit":
-                print("train_dataset length:", len(self.train_dataset))
-                print("val_dataset length:", len(self.val_dataset))
-                print("x[0:3]", self.train_dataset[0:3][0])
-                print("y[0:3]", self.train_dataset[0:3][1])
-            elif stage == "test":
-                print("test_dataset", len(self.test_dataset))
+        # split data using pytorch lightning
+        x = torch.tensor(x, dtype=torch.float32)
+        y = torch.tensor(y, dtype=torch.float32)
+        n = x.shape[0]
+        n_train = int(n * 0.8)
+        n_val = int(n * 0.1)
+        n_test = n - n_train - n_val
+        # shuffle data
+        x_train = x[:n_train]
+        y_train = y[:n_train]
+        x_val = x[n_train:n_train+n_val]
+        y_val = y[n_train:n_train+n_val]
+        x_test = x[n_train+n_val:]
+        y_test = y[n_train+n_val:]
+
+        self.train_dataset = CustomDataset(x_train, y_train)
+        self.val_dataset = CustomDataset(x_val, y_val)
+        self.test_dataset = CustomDataset(x_test, y_test)
+
     def train_dataloader(self) -> DataLoader:
         """Return train dataloader"""
         return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=4)
