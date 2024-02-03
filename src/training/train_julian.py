@@ -1,54 +1,50 @@
-import os
-import h5py
-import numpy as np
 from src.models.SimpleFC import SimpleFC_Lit
 import lightning as L
 from lightning.pytorch.tuner import Tuner
-from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor, EarlyStopping, StochasticWeightAveraging
+from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor, EarlyStopping, StochasticWeightAveraging, RichModelSummary, DeviceStatsMonitor
+from lightning.pytorch.profilers import PyTorchProfiler
 import torch
-torch.set_float32_matmul_precision("medium")
+from pytorch_lightning.loggers import TensorBoardLogger
+torch.set_float32_matmul_precision("high")
 
 if __name__ == "__main__":
 
-    hparams = {"input_dim": 200,
-            "fc_dims": [200, 200, 200, 200, 200],
+    hparams = {
+            "model_name": "FullCNN",
+            "fc_dims": [201, 200, 200, 200, 200, 200],
+            #"fc_dims": [201, 150, 100, 50, 30, 50, 100, 200, 400, 400, 20, 150, 100, 50, 30, 50, 100, 15, 200],
+            #"fc_dims": [201, 200, 150, 100, 50, 150, 200, 200],
+            "dropout_in": 0.2,
             "dropout": 0.4,
-            "output_dim": 200,
-            "lr": 0.01,
-            "batch_size": 128,
-            "train_path": "data/julian/batch1.hdf5",
-            # "val_path": "runs/example_run/data/data_val.h5",
-            # "test_path": "runs/example_run/data/data_test.h5",
+            "with_batchnorm": True,
+            "lr": 0.001,
+            "batch_size": 4,
+            "train_path": "D:/data_test1.hdf5",
+            "optimizer": "AdamW",
+            "SGD_weight_decay": 0.0,
+            "SGD_momentum": 0.9,
+            "SGD_dampening": 0.0,
+            "SGD_nesterov": False,
                }
     model = SimpleFC_Lit(hparams)
     lr_monitor = LearningRateMonitor(logging_interval='step')
     early_stopping = EarlyStopping(
             monitor="val_loss",
             patience=50)
+    logger = TensorBoardLogger("lightning_logs", name=hparams["model_name"])
     val_ckeckpoint = ModelCheckpoint( # saved in `trainer.default_root_dir`/`logger.version`/`checkpoint_callback.dirpath`
-            filename="{epoch}-{step}-{val_loss:.5f}",
+            filename="{epoch}-{step}-{val_loss:.8f}",
             monitor="val_loss",
             mode="min",
-            save_top_k=1,
+            save_top_k=5,
             )
-    callbacks = [val_ckeckpoint, lr_monitor, early_stopping]
-    trainer = L.Trainer(max_epochs=100, accelerator="gpu", precision="16-mixed", callbacks=callbacks)
+    swa = StochasticWeightAveraging(swa_lrs=0.0001,
+                                    swa_epoch_start=100,
+                                    )
+    callbacks = [val_ckeckpoint, lr_monitor, early_stopping, swa, RichModelSummary()] #, DeviceStatsMonitor()
+    profiler = PyTorchProfiler()
+    trainer = L.Trainer(enable_checkpointing=True, max_epochs=500, accelerator="gpu", callbacks=callbacks, logger=logger) #precision="16-mixed", 
+    #trainer = L.Trainer(enable_checkpointing=False, max_epochs=2, accelerator="cpu") #precision="16-mixed", 
     trainer.fit(model)
 
-    # # to load data
-    # train_path = hparams["train_path"]
-    # with h5py.File(train_path, "r") as hf:
-    #     x = hf["Set1/GImp"][:]
-    #     y = hf["Set1/SImp"][:]
-    # print(x.shape)
-    # print(y.shape)
-    # print("x[0]", x[0])
-    # # convert from complex to two real numbers and then concatenate
-    # x = np.concatenate((x.real, x.imag), axis=1)
-    # y = np.concatenate((y.real, y.imag), axis=1)
-    #
-    # print(x.shape)
-    # print(y.shape)
-    # print("x[0]", x[0])
-    #
-    #
+    #torch.save(model, logger.log_dir)

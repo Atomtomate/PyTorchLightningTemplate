@@ -6,13 +6,7 @@ import torch
 torch.set_float32_matmul_precision("medium")
 
 if __name__ == "__main__":
-    hparams = {"input_dim": 2,
-            "fc_dims": [50, 50],
-            "dropout": 0.4,
-            "output_dim": 2,
-            "lr": 0.01,
-            "batch_size": 128,
-            "train_path": "runs/example_run/data/data_train.h5",
+    hparams = {
             "val_path": "runs/example_run/data/data_val.h5",
             "test_path": "runs/example_run/data/data_test.h5",
                }
