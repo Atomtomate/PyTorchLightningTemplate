@@ -11,15 +11,15 @@ torch.set_float32_matmul_precision("high")
 
 
 
-hparams1 = {
-            "model_name": "FullCN_SizeTest",
+hparams0 = {
+            "model_name": "FullCN_LossTest",
             "in_dim" : 201,
-            "fc_dims": [(200,6)],
+            "fc_dims": [(200,10)],
             "dropout_in": 0.0,
             "dropout": 0.0,
             "with_batchnorm": False,
             "lr": 0.001584893192461114, #0.01,
-            "batch_size": 128,
+            "batch_size": 512,
             "train_path": "D:/data_test2.hdf5",
             "optimizer": "Adam",
             "activation": "ReLU",
@@ -30,38 +30,20 @@ hparams1 = {
             "loss": "MSE",
         }
 
-hparams0 = deepcopy(hparams1)
-hparams0["fc_dims"] = [(200,5)]
+hparams1 = deepcopy(hparams0)
+hparams1["loss"] = "WeightedMSE"
+hparams2 = deepcopy(hparams0)
+hparams2["loss"] = "WeightedMSE2"
+hparams3 = deepcopy(hparams0)
+hparams3["loss"] = "ScaledMSE"
+hparams4 = deepcopy(hparams0)
+hparams4["loss"] = "WeightedScaledLoss"
 
-hparams2 = deepcopy(hparams1)
-hparams2["fc_dims"] = [(200,7)]
-
-hparams3 = deepcopy(hparams1)
-hparams3["fc_dims"] = [(200,8)]
-
-hparams4 = deepcopy(hparams1)
-hparams4["fc_dims"] = [(200,9)]
-
-hparams5 = deepcopy(hparams1)
-hparams5["fc_dims"] = [(200,10)]
-
-hparams6 = deepcopy(hparams1)
-hparams6["fc_dims"] = [(200,11)]
-
-hparams7 = deepcopy(hparams1)
-hparams7["fc_dims"] = [(200,12)]
-
-hparams8 = deepcopy(hparams1)
-hparams8["fc_dims"] = [(200,13)]
-
-
-hparams_list = [hparams0, hparams1, hparams2, hparams3, hparams4, hparams5, hparams6, hparams7, hparams8]
+hparams_list = [hparams0, hparams1, hparams2, hparams3, hparams4]
 i = 0
 if __name__ == "__main__":
-    for bs in [32768,4096,1024,128,256,512]: 
         for hparams in hparams_list:
-                if i > 23:
-                        hparams["batch_size"] = bs
+                if i > 0:
                         model = SimpleFC_Lit(hparams) #FC_Split(hparams)
                         lr_monitor = LearningRateMonitor(logging_interval='step')
                         early_stopping = EarlyStopping(

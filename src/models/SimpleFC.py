@@ -5,19 +5,88 @@ import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 import lightning as L
 import h5py
-torch.set_float32_matmul_precision("medium")
+torch.set_float32_matmul_precision("high")
 import numpy as np
 
-class weighted_MSELoss(nn.Module):
-    def __init__(self, ylen: int):
+class ScaledLoss(nn.Module):
+    def __init__(self, ylen: int, loss = nn.MSELoss(), eps = 1e-4):
         super().__init__()
         self.ylen = ylen
-        #self.loss = nn.MSELoss()
+        self.dist = nn.PairwiseDistance(p=2, keepdim = True)
+        self.loss = loss
+        self.eps  = eps
 
     def forward(self,pred,targets):
-        val_re = torch.mean((pred[:,:self.ylen] - targets[:,:self.ylen])**2)
-        val_im = torch.mean((pred[:,self.ylen:] - targets[:,self.ylen:])**2)
-        return val_re + val_im
+
+        dist_re = torch.clamp(torch.max(targets[:,:self.ylen],dim=1,keepdim=True).values -
+                    torch.min(targets[:,:self.ylen],dim=1,keepdim=True).values, min=self.eps, max=self.eps)
+        dist_im = torch.clamp(torch.max(targets[:,self.ylen:],dim=1,keepdim=True).values - 
+                    torch.min(targets[:,self.ylen:],dim=1,keepdim=True).values, min=self.eps, max=self.eps)
+        loss_re = self.loss(pred[:,:self.ylen] / dist_re, targets[:,:self.ylen] / dist_re)
+        loss_im = self.loss(pred[:,self.ylen:] / dist_im, targets[:,self.ylen:] / dist_im)
+        return loss_re + loss_im
+
+class WeightedLoss(nn.Module):
+    def __init__(self, ylen: int, loss = nn.MSELoss()):
+        super().__init__()
+        self.ylen = ylen
+        self.dist = nn.PairwiseDistance(p=2, keepdim = True)
+        self.loss = loss
+
+    def forward(self,pred,targets):
+
+        dist_re = self.dist(
+                        torch.max(targets[:,:self.ylen],dim=1,keepdim=True).values, 
+                        torch.min(targets[:,:self.ylen],dim=1,keepdim=True).values)
+        dist_im = self.dist(
+                        torch.max(targets[:,self.ylen:],dim=1,keepdim=True).values, 
+                        torch.min(targets[:,self.ylen:],dim=1,keepdim=True).values)
+        scale_re = dist_im / (dist_re + dist_im)
+        scale_im = dist_re / (dist_re + dist_im)
+        loss_re = self.loss(scale_re * pred[:,:self.ylen], scale_re * targets[:,:self.ylen])
+        loss_im = self.loss(scale_im * pred[:,self.ylen:], scale_im * targets[:,self.ylen:])
+        return loss_re + loss_im
+    
+class WeightedLoss2(nn.Module):
+    def __init__(self, ylen: int, loss = nn.MSELoss()):
+        super().__init__()
+        self.ylen = ylen
+        self.dist = nn.PairwiseDistance(p=2, keepdim = True)
+        self.loss = loss
+
+    def forward(self,pred,targets):
+
+        dist_re = self.dist(
+                        torch.max(targets[:,:self.ylen],dim=1,keepdim=True).values, 
+                        torch.min(targets[:,:self.ylen],dim=1,keepdim=True).values)
+        dist_im = self.dist(
+                        torch.max(targets[:,self.ylen:],dim=1,keepdim=True).values, 
+                        torch.min(targets[:,self.ylen:],dim=1,keepdim=True).values)
+        scale_re = dist_re / (dist_re + dist_im)
+        scale_im = dist_im / (dist_re + dist_im)
+        loss_re = self.loss(scale_re * pred[:,:self.ylen], scale_re * targets[:,:self.ylen])
+        loss_im = self.loss(scale_im * pred[:,self.ylen:], scale_im * targets[:,self.ylen:])
+        return loss_re + loss_im
+    
+class WeightedScaledLoss(nn.Module):
+    def __init__(self, ylen: int, loss = nn.MSELoss(), eps = 1e-4):
+        super().__init__()
+        self.ylen = ylen
+        self.dist = nn.PairwiseDistance(p=2, keepdim = True)
+        self.loss = loss
+        self.eps  = eps
+
+    def forward(self,pred,targets):
+
+        dist_re = torch.clamp(torch.max(targets[:,:self.ylen],dim=1,keepdim=True).values -
+                    torch.min(targets[:,:self.ylen],dim=1,keepdim=True).values, min=self.eps, max=self.eps)
+        dist_im = torch.clamp(torch.max(targets[:,self.ylen:],dim=1,keepdim=True).values - 
+                    torch.min(targets[:,self.ylen:],dim=1,keepdim=True).values, min=self.eps, max=self.eps)
+        scale_re = dist_im / (dist_re*(dist_re + dist_im))
+        scale_im = dist_re / (dist_im*(dist_re + dist_im))
+        loss_re = self.loss(scale_re * pred[:,:self.ylen], scale_re * targets[:,:self.ylen])
+        loss_im = self.loss(scale_im * pred[:,self.ylen:], scale_im * targets[:,self.ylen:])
+        return loss_re + loss_im
 
 class CustomDataset(Dataset):
     """Custom dataset class.
@@ -50,48 +119,82 @@ class CustomDataset(Dataset):
         #return x * self.y_std + self.y_mean
 
     def __getitem__(self, idx: int) -> tuple:
-        x_norm = self.normalize_x(self.x[idx])
-        y_norm = self.normalize_y(self.y[idx])
+        x_norm = self.normalize_x(self.x[idx,:])
+        y_norm = self.normalize_y(self.y[idx,:])
         return x_norm, y_norm
 
 class SimpleFC_Lit(L.LightningModule):
     """Simple fully connected model with pytorch lightning."""
-    def __init__(self, hparams: dict, verbose: bool=True) -> None:
+    def __init__(self, hparams: dict) -> None:
         super().__init__()
-        self.verbose = verbose
         self.save_hyperparameters(hparams)
         self.batch_size = hparams["batch_size"]
         self.lr = hparams["lr"]
         self.dropout_in = nn.Dropout(hparams["dropout_in"]) if hparams["dropout_in"] > 0 else nn.Identity()
         self.dropout = nn.Dropout(hparams["dropout"]) if hparams["dropout"] > 0  else nn.Identity()
-        self.activation = nn.SiLU() #nn.LeakyReLU() 
+        self.activation_str = hparams["activation"]
+        self.in_dim = hparams["in_dim"]
+        self.loss_str = hparams["loss"] if "loss" in hparams else "MSE"
+        ylen = 100
+
+
+        if self.loss_str == "MSE":
+            self.loss = nn.MSELoss()
+        elif self.loss_str == "WeightedMSE":
+            self.loss = WeightedLoss(ylen)
+        elif self.loss_str == "WeightedMSE2":
+            self.loss = WeightedLoss2(ylen)
+        elif self.loss_str == "ScaledMSE":
+            self.loss = ScaledLoss(ylen)
+        elif self.loss_str == "WeightedScaledLoss":
+            self.loss_str == WeightedScaledLoss(ylen)
+        else:
+            raise ValueError("unkown activation: " + self.hparams["activation"])
+
+        if hparams["activation"] == "LeakyReLU":
+            self.activation = nn.LeakyReLU() 
+        elif hparams["activation"] == "SiLU":
+            self.activation = nn.SiLU()
+        elif hparams["activation"] == "ReLU":
+            self.activation = nn.ReLU()
+        else:
+            raise ValueError("unkown activation: " + self.hparams["activation"])
         self.linear_layers = []
 
-        def block(i):
-            return nn.Sequential(
-                self.dropout_in if i == 0 else self.dropout,
-                nn.Linear(hparams["fc_dims"][i], hparams["fc_dims"][i+1]),
-                nn.BatchNorm1d(hparams["fc_dims"][i+1]) if hparams["with_batchnorm"] else nn.Identity(),
-                self.activation
-            )
-        # append layers with dropout and norm
-        for i in range(len(hparams["fc_dims"])-1):
-            self.linear_layers.append(block(i))
+        self.out_dim = self.in_dim
 
-        # append output layer
-        self.linear_layers.append(nn.Sequential(
-            self.dropout,
-            nn.Linear(hparams["fc_dims"][-2], hparams["fc_dims"][-1]))
-        )
+        def linear_block(Nout, last_layer=False):
+            res = [
+                self.dropout_in if i == 0 else self.dropout,
+                nn.Linear(self.out_dim, Nout),
+                nn.BatchNorm1d(Nout) if (not last_layer) and hparams["with_batchnorm"] else nn.Identity(),
+                self.activation if (not last_layer) else nn.Identity() 
+            ]
+            self.out_dim = Nout
+            return res
+            
+        def dense_layer(i):
+            last_block = (i == len(hparams["fc_dims"]) - 1)
+
+            if isinstance(hparams["fc_dims"][i], tuple):
+                bl = []
+                for j in range(hparams["fc_dims"][i][1]):
+                    bl.extend(linear_block(hparams["fc_dims"][i][0], last_layer = last_block and (j == hparams["fc_dims"][i][1] - 1)))
+                return nn.Sequential(*bl)
+            else:
+                return nn.Sequential(*linear_block(hparams["fc_dims"][i]))
+
+        # append layers with dropout and norm
+        for i in range(len(hparams["fc_dims"])):
+            self.linear_layers.append(dense_layer(i))
 
         self.linear_layers = nn.ModuleList(self.linear_layers)
-        self.loss = weighted_MSELoss(hparams["fc_dims"][-1] // 2) #nn.MSELoss() #weighted_MSELoss() #
-        self.skip = nn.Linear(hparams["fc_dims"][0], hparams["fc_dims"][-1])
+        self.skip = nn.Linear(self.in_dim, self.out_dim)
 
         # initialize weights, might not be necessary
         for layer in self.linear_layers:
             if isinstance(layer, nn.Linear):
-                nn.init.kaiming_normal_(layer.weight, mode="fan_out", nonlinearity="leaky_relu")
+                nn.init.kaiming_normal_(layer.weight, mode="fan_out", nonlinearity="linear")
                 nn.init.zeros_(layer.bias)
         nn.init.kaiming_normal_(self.skip.weight)
         nn.init.zeros_(self.skip.bias)
@@ -110,7 +213,7 @@ class SimpleFC_Lit(L.LightningModule):
         x, y = batch
         y_hat = self(x)  # self.forward(x)
         loss = self.loss(y_hat, y)
-        self.log("train_loss", loss, prog_bar=True)
+        self.log("train_loss", loss, prog_bar=False)
         return loss
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
@@ -140,6 +243,8 @@ class SimpleFC_Lit(L.LightningModule):
         
         elif self.hparams["optimizer"] == "AdamW":
             optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
+        elif self.hparams["optimizer"] == "Adam":
+            optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
         else:
             raise ValueError("unkown optimzer: " + self.hparams["optimzer"])
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.1, patience=10, verbose=True)
@@ -181,14 +286,14 @@ class SimpleFC_Lit(L.LightningModule):
 
     def train_dataloader(self) -> DataLoader:
         """Return train dataloader"""
-        return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=1)
+        return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=8, persistent_workers=True)
 
     def val_dataloader(self) -> DataLoader:
         """Return val dataloader"""
-        return DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=4)
+        return DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=8, persistent_workers=True)
 
     def test_dataloader(self) -> DataLoader:
         """Return test dataloader"""
-        return DataLoader(self.test_dataset, batch_size=self.batch_size, num_workers=4)
+        return DataLoader(self.test_dataset, batch_size=self.batch_size, num_workers=8, persistent_workers=True)
 
 
