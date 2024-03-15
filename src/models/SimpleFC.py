@@ -7,6 +7,49 @@ import lightning as L
 import h5py
 torch.set_float32_matmul_precision("high")
 import numpy as np
+from torch.func import functional_call, grad, vmap
+
+def zero_gradients(x):
+    if isinstance(x, torch.Tensor):
+        if x.grad is not None:
+            x.grad.detach_()
+            x.grad.zero_()
+    elif isinstance(x, collections.abc.Iterable):
+        for elem in x:
+            zero_gradients(elem)
+
+def compute_jacobian(inputs, output):
+    """
+    :param inputs: Batch X Size (e.g. Depth X Width X Height)
+    :param output: Batch X Classes
+    :return: jacobian: Batch X Classes X Size
+    From: https://discuss.pytorch.org/t/implementing-jacobian-differential-for-loss-function/35815
+    """
+    assert inputs.requires_grad
+
+    num_classes = output.size()[1]
+
+    jacobian = torch.zeros(num_classes, *inputs.size())
+    grad_output = torch.zeros(*output.size())
+    if inputs.is_cuda:
+        grad_output = grad_output.cuda()
+        jacobian = jacobian.cuda()
+
+    for i in range(num_classes):
+        zero_gradients(inputs)
+        grad_output.zero_()
+        grad_output[:, i] = 1
+        output.backward(grad_output, retain_graph=True)
+        jacobian[i] = inputs.grad.data
+
+    return torch.transpose(jacobian, dim0=0, dim1=1)
+
+class DiffLoss(nn.Module):
+    def __init__(self, ylen: int, loss = nn.MSELoss(), eps = 1e-4):
+        super().__init__()
+        
+    def forward(self,pred,targets):    
+        dfdx = vmap(grad(f), in_dims=(0, None))
 
 class ScaledLoss(nn.Module):
     def __init__(self, ylen: int, loss = nn.MSELoss(), eps = 1e-4):
@@ -17,7 +60,6 @@ class ScaledLoss(nn.Module):
         self.eps  = eps
 
     def forward(self,pred,targets):
-
         dist_re = torch.clamp(torch.max(targets[:,:self.ylen],dim=1,keepdim=True).values -
                     torch.min(targets[:,:self.ylen],dim=1,keepdim=True).values, min=self.eps, max=self.eps)
         dist_im = torch.clamp(torch.max(targets[:,self.ylen:],dim=1,keepdim=True).values - 
