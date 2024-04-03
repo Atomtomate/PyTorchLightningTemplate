@@ -11,46 +11,29 @@ torch.set_float32_matmul_precision("high")
 
 
 hparams1 = {
-            "model_name": "FullCN_WeightedLoss_6L_ActivationTest",
-            "fc_dims": [201, 200, 200, 200, 200, 200, 200, 200],
+            "model_name": "TMP_01",
+            "in_dim" : 201,
+            "fc_dims": [(200,3)],
             "dropout_in": 0.0,
             "dropout": 0.0,
             "with_batchnorm": False,
             "lr": 0.001584893192461114, #0.01,
             "batch_size": 128,
-            "train_path": "D:/data_test2.hdf5",
+            "train_path": "D:/data_batch2_nPrune.hdf5",
             "optimizer": "Adam",
             "activation": "ReLU",
             "SGD_weight_decay": 0.0,
             "SGD_momentum": 0.9,
             "SGD_dampening": 0.0,
             "SGD_nesterov": False,
+            "loss": "MSE",
         }
 
-hparams2 = deepcopy(hparams1)
-hparams2["activation"] = "LeakyReLU"
-hparams3 = deepcopy(hparams1)
-hparams3["activation"] = "SiLU"
-
-hparams1_b = deepcopy(hparams1)
-hparams1_b["with_batchnorm"] = True
-hparams2_b = deepcopy(hparams2)
-hparams2_b["with_batchnorm"] = True
-hparams3_b = deepcopy(hparams3)
-hparams3_b["with_batchnorm"] = True
-
-hparams1_d = deepcopy(hparams1_b)
-hparams1_d["dropout"] = 0.2
-hparams2_d = deepcopy(hparams2_b)
-hparams2_d["dropout"] = 0.2
-hparams3_d = deepcopy(hparams3_b)
-hparams3_d["dropout"] = 0.2
-hparams_list = [hparams1, hparams2, hparams3, hparams1_b, hparams2_b, hparams3_b, hparams1_d, hparams2_d, hparams3_d]
+#TODO: REDO 35
+hparams_list = [hparams1]
 i = 0
 if __name__ == "__main__":
-    for bs in [64,128,256]: 
         for hparams in hparams_list:
-                hparams["batch_size"] = bs
                 model = SimpleFC_Lit(hparams) #FC_Split(hparams)
                 lr_monitor = LearningRateMonitor(logging_interval='step')
                 early_stopping = EarlyStopping(
@@ -64,6 +47,7 @@ if __name__ == "__main__":
                         save_top_k=10,
                         save_last =True
                         )
+                
                 swa = StochasticWeightAveraging(swa_lrs=0.0001,
                                                 swa_epoch_start=50,
                                                 )

@@ -9,126 +9,21 @@ torch.set_float32_matmul_precision("high")
 import numpy as np
 from torch.func import functional_call, grad, vmap
 
-def zero_gradients(x):
-    if isinstance(x, torch.Tensor):
-        if x.grad is not None:
-            x.grad.detach_()
-            x.grad.zero_()
-    elif isinstance(x, collections.abc.Iterable):
-        for elem in x:
-            zero_gradients(elem)
-
-def compute_jacobian(inputs, output):
-    """
-    :param inputs: Batch X Size (e.g. Depth X Width X Height)
-    :param output: Batch X Classes
-    :return: jacobian: Batch X Classes X Size
-    From: https://discuss.pytorch.org/t/implementing-jacobian-differential-for-loss-function/35815
-    """
-    assert inputs.requires_grad
-
-    num_classes = output.size()[1]
-
-    jacobian = torch.zeros(num_classes, *inputs.size())
-    grad_output = torch.zeros(*output.size())
-    if inputs.is_cuda:
-        grad_output = grad_output.cuda()
-        jacobian = jacobian.cuda()
-
-    for i in range(num_classes):
-        zero_gradients(inputs)
-        grad_output.zero_()
-        grad_output[:, i] = 1
-        output.backward(grad_output, retain_graph=True)
-        jacobian[i] = inputs.grad.data
-
-    return torch.transpose(jacobian, dim0=0, dim1=1)
 
 class DiffLoss(nn.Module):
     def __init__(self, ylen: int, loss = nn.MSELoss(), eps = 1e-4):
         super().__init__()
+        self.loss = loss
         
-    def forward(self,pred,targets):    
-        dfdx = vmap(grad(f), in_dims=(0, None))
+    def forward(self, inputs, pred, targets):   
+        pred.backward(torch.ones_like(pred))
+        ll = inputs.grad
+        print(ll.shape)
+        #l = self.loss(pred, targets)
+        #l.backward()
+        #ll = l.grad
+        return self.loss(ll, targets)
 
-class ScaledLoss(nn.Module):
-    def __init__(self, ylen: int, loss = nn.MSELoss(), eps = 1e-4):
-        super().__init__()
-        self.ylen = ylen
-        self.dist = nn.PairwiseDistance(p=2, keepdim = True)
-        self.loss = loss
-        self.eps  = eps
-
-    def forward(self,pred,targets):
-        dist_re = torch.clamp(torch.max(targets[:,:self.ylen],dim=1,keepdim=True).values -
-                    torch.min(targets[:,:self.ylen],dim=1,keepdim=True).values, min=self.eps, max=self.eps)
-        dist_im = torch.clamp(torch.max(targets[:,self.ylen:],dim=1,keepdim=True).values - 
-                    torch.min(targets[:,self.ylen:],dim=1,keepdim=True).values, min=self.eps, max=self.eps)
-        loss_re = self.loss(pred[:,:self.ylen] / dist_re, targets[:,:self.ylen] / dist_re)
-        loss_im = self.loss(pred[:,self.ylen:] / dist_im, targets[:,self.ylen:] / dist_im)
-        return loss_re + loss_im
-
-class WeightedLoss(nn.Module):
-    def __init__(self, ylen: int, loss = nn.MSELoss()):
-        super().__init__()
-        self.ylen = ylen
-        self.dist = nn.PairwiseDistance(p=2, keepdim = True)
-        self.loss = loss
-
-    def forward(self,pred,targets):
-
-        dist_re = self.dist(
-                        torch.max(targets[:,:self.ylen],dim=1,keepdim=True).values, 
-                        torch.min(targets[:,:self.ylen],dim=1,keepdim=True).values)
-        dist_im = self.dist(
-                        torch.max(targets[:,self.ylen:],dim=1,keepdim=True).values, 
-                        torch.min(targets[:,self.ylen:],dim=1,keepdim=True).values)
-        scale_re = dist_im / (dist_re + dist_im)
-        scale_im = dist_re / (dist_re + dist_im)
-        loss_re = self.loss(scale_re * pred[:,:self.ylen], scale_re * targets[:,:self.ylen])
-        loss_im = self.loss(scale_im * pred[:,self.ylen:], scale_im * targets[:,self.ylen:])
-        return loss_re + loss_im
-    
-class WeightedLoss2(nn.Module):
-    def __init__(self, ylen: int, loss = nn.MSELoss()):
-        super().__init__()
-        self.ylen = ylen
-        self.dist = nn.PairwiseDistance(p=2, keepdim = True)
-        self.loss = loss
-
-    def forward(self,pred,targets):
-
-        dist_re = self.dist(
-                        torch.max(targets[:,:self.ylen],dim=1,keepdim=True).values, 
-                        torch.min(targets[:,:self.ylen],dim=1,keepdim=True).values)
-        dist_im = self.dist(
-                        torch.max(targets[:,self.ylen:],dim=1,keepdim=True).values, 
-                        torch.min(targets[:,self.ylen:],dim=1,keepdim=True).values)
-        scale_re = dist_re / (dist_re + dist_im)
-        scale_im = dist_im / (dist_re + dist_im)
-        loss_re = self.loss(scale_re * pred[:,:self.ylen], scale_re * targets[:,:self.ylen])
-        loss_im = self.loss(scale_im * pred[:,self.ylen:], scale_im * targets[:,self.ylen:])
-        return loss_re + loss_im
-    
-class WeightedScaledLoss(nn.Module):
-    def __init__(self, ylen: int, loss = nn.MSELoss(), eps = 1e-4):
-        super().__init__()
-        self.ylen = ylen
-        self.dist = nn.PairwiseDistance(p=2, keepdim = True)
-        self.loss = loss
-        self.eps  = eps
-
-    def forward(self,pred,targets):
-
-        dist_re = torch.clamp(torch.max(targets[:,:self.ylen],dim=1,keepdim=True).values -
-                    torch.min(targets[:,:self.ylen],dim=1,keepdim=True).values, min=self.eps, max=self.eps)
-        dist_im = torch.clamp(torch.max(targets[:,self.ylen:],dim=1,keepdim=True).values - 
-                    torch.min(targets[:,self.ylen:],dim=1,keepdim=True).values, min=self.eps, max=self.eps)
-        scale_re = dist_im / (dist_re*(dist_re + dist_im))
-        scale_im = dist_re / (dist_im*(dist_re + dist_im))
-        loss_re = self.loss(scale_re * pred[:,:self.ylen], scale_re * targets[:,:self.ylen])
-        loss_im = self.loss(scale_im * pred[:,self.ylen:], scale_im * targets[:,self.ylen:])
-        return loss_re + loss_im
 
 class CustomDataset(Dataset):
     """Custom dataset class.
@@ -165,8 +60,7 @@ class CustomDataset(Dataset):
         y_norm = self.normalize_y(self.y[idx,:])
         return x_norm, y_norm
 
-class SimpleFC_Lit(L.LightningModule):
-    """Simple fully connected model with pytorch lightning."""
+class SimpleFC_diff(L.LightningModule):
     def __init__(self, hparams: dict) -> None:
         super().__init__()
         self.save_hyperparameters(hparams)
@@ -178,38 +72,19 @@ class SimpleFC_Lit(L.LightningModule):
         self.in_dim = hparams["in_dim"]
         self.loss_str = hparams["loss"] if "loss" in hparams else "MSE"
         ylen = 100
-        
 
-        if self.loss_str == "MSE":
-            self.loss = nn.MSELoss()
-        elif self.loss_str == "WeightedMSE":
-            self.loss = WeightedLoss(ylen)
-        elif self.loss_str == "WeightedMSE2":
-            self.loss = WeightedLoss2(ylen)
-        elif self.loss_str == "ScaledMSE":
-            self.loss = ScaledLoss(ylen)
-        elif self.loss_str == "WeightedScaledLoss":
-            self.loss_str == WeightedScaledLoss(ylen)
-        else:
-            raise ValueError("unkown activation: " + self.hparams["activation"])
 
-        if hparams["activation"] == "LeakyReLU":
-            self.activation = nn.LeakyReLU() 
-        elif hparams["activation"] == "SiLU":
-            self.activation = nn.SiLU()
-        elif hparams["activation"] == "ReLU":
-            self.activation = nn.ReLU()
-        else:
-            raise ValueError("unkown activation: " + self.hparams["activation"])
+        self.loss_str = "diffLoss"
+        self.loss = DiffLoss(ylen)
+
+        self.activation = nn.ReLU()
         self.linear_layers = []
 
         self.out_dim = self.in_dim
 
         def linear_block(Nout, last_layer=False):
             res = [
-                self.dropout_in if i == 0 else self.dropout,
                 nn.Linear(self.out_dim, Nout),
-                nn.BatchNorm1d(Nout) if (not last_layer) and hparams["with_batchnorm"] else nn.Identity(),
                 self.activation if (not last_layer) else nn.Identity() 
             ]
             self.out_dim = Nout
@@ -251,31 +126,39 @@ class SimpleFC_Lit(L.LightningModule):
 
     def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         """Training step"""
+        torch.set_grad_enabled(True)
         x, y = batch
+        x.requires_grad = True
+        y.requires_grad = True
         y_hat = self(x)  # self.forward(x)
-        loss = self.loss(y_hat, y)
+        loss = self.loss(x, y_hat, y)
         self.log("train_loss", loss, prog_bar=False)
         return loss
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         """Validation step"""
+        torch.set_grad_enabled(True)
         x, y = batch
+        x.requires_grad = True
+        y.requires_grad = True
         y_hat = self(x)
-        loss = self.loss(y_hat, y)
+        loss = self.loss(x, y_hat, y)
         self.log("val_loss", loss, prog_bar=True)
         return loss
 
     def test_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         """Test step"""
+        torch.set_grad_enabled(True)
         x, y = batch
+        x.requires_grad = True
+        y.requires_grad = True
         y_hat = self(x)
-        loss = self.loss(y_hat, y)
+        loss = self.loss(x, y_hat, y)
         self.log("test_loss", loss)
         return loss
 
     def configure_optimizers(self) -> dict:
         """Configure optimizer"""
-        print("dbg: ", self.parameters())
         if self.hparams["optimizer"] == "SGD":
             optimizer = torch.optim.SGD(self.parameters(), lr=self.lr,
                                     momentum=self.hparams["SGD_momentum"],

@@ -1,5 +1,4 @@
-from src.models.SimpleFC import SimpleFC_Lit
-from src.models.FCSplit import FC_Split
+from src.models.AE import AutoEncoder_01
 from copy import deepcopy
 import lightning as L
 from lightning.pytorch.tuner import Tuner
@@ -7,20 +6,20 @@ from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor, Ea
 from lightning.pytorch.profilers import PyTorchProfiler
 import torch
 from pytorch_lightning.loggers import TensorBoardLogger
-torch.set_float32_matmul_precision("high")
+torch.set_float32_matmul_precision("highest")
+torch.set_default_dtype(torch.float64)
 
-
-
-hparams1 = {
-            "model_name": "FullCN_SizeTest",
-            "in_dim" : 201,
-            "fc_dims": [(200,6)],
+hparams0 = {
+            "model_name": "AE_nPrune_02_nLayers",
+            "in_dim" : 200,
+            "latent_dim": 30,
+            "n_layers": 3,
             "dropout_in": 0.0,
             "dropout": 0.0,
             "with_batchnorm": False,
             "lr": 0.001584893192461114, #0.01,
-            "batch_size": 128,
-            "train_path": "D:/data_test2.hdf5",
+            "batch_size": 1024,
+            "train_path": "D:/data_batch2_nPrune.hdf5",
             "optimizer": "Adam",
             "activation": "ReLU",
             "SGD_weight_decay": 0.0,
@@ -30,65 +29,43 @@ hparams1 = {
             "loss": "MSE",
         }
 
-hparams0 = deepcopy(hparams1)
-hparams0["fc_dims"] = [(200,5)]
-
-hparams2 = deepcopy(hparams1)
-hparams2["fc_dims"] = [(200,7)]
-
-hparams3 = deepcopy(hparams1)
-hparams3["fc_dims"] = [(200,8)]
-
-hparams4 = deepcopy(hparams1)
-hparams4["fc_dims"] = [(200,9)]
-
-hparams5 = deepcopy(hparams1)
-hparams5["fc_dims"] = [(200,10)]
-
-hparams6 = deepcopy(hparams1)
-hparams6["fc_dims"] = [(200,11)]
-
-hparams7 = deepcopy(hparams1)
-hparams7["fc_dims"] = [(200,12)]
-
-hparams8 = deepcopy(hparams1)
-hparams8["fc_dims"] = [(200,13)]
-
-
-hparams_list = [hparams0, hparams1, hparams2, hparams3, hparams4, hparams5, hparams6, hparams7, hparams8]
+hparams_list = [hparams0]
 i = 0
 if __name__ == "__main__":
-    for bs in [32768,4096,1024,128,256,512]: 
         for hparams in hparams_list:
-                if i > 23:
+                for bs in [1024, 196, 32]:
                         hparams["batch_size"] = bs
-                        model = SimpleFC_Lit(hparams) #FC_Split(hparams)
-                        lr_monitor = LearningRateMonitor(logging_interval='step')
-                        early_stopping = EarlyStopping(
-                                monitor="val_loss",
-                                patience=50)
-                        logger = TensorBoardLogger("lightning_logs", name=hparams["model_name"])
-                        val_ckeckpoint = ModelCheckpoint( # saved in `trainer.default_root_dir`/`logger.version`/`checkpoint_callback.dirpath`
-                                filename="{epoch}-{step}-{val_loss:.8f}",
-                                monitor="val_loss",
-                                mode="min",
-                                save_top_k=10,
-                                save_last =True
-                                )
-                        swa = StochasticWeightAveraging(swa_lrs=0.0001,
-                                                        swa_epoch_start=100,
-                                                        )
-                        callbacks = [val_ckeckpoint, lr_monitor, early_stopping, swa, RichModelSummary()] #, DeviceStatsMonitor()
-                        profiler = PyTorchProfiler()
-                        trainer = L.Trainer(enable_checkpointing=True, max_epochs=200, accelerator="gpu", callbacks=callbacks, logger=logger) #precision="16-mixed", 
-                        #trainer = L.Trainer(enable_checkpointing=False, max_epochs=2, accelerator="cpu") #precision="16-mixed", 
+                        for n_layers in [1,2,3,4,6,8,10,12,14,16,18,20,22,24,26,28,30]:
+                                if i > 1:# or i == 6:
+                                        hparams0["n_layers"] = n_layers
+                                        model = AutoEncoder_01(hparams) 
+                                        lr_monitor = LearningRateMonitor(logging_interval='step')
+                                        early_stopping = EarlyStopping(
+                                                monitor="val_loss",
+                                                patience=40)
+                                        logger = TensorBoardLogger("lightning_logs", name=hparams["model_name"])
+                                        val_ckeckpoint = ModelCheckpoint( # saved in `trainer.default_root_dir`/`logger.version`/`checkpoint_callback.dirpath`
+                                                filename="{epoch}-{step}-{val_loss:.8f}",
+                                                monitor="val_loss",
+                                                mode="min",
+                                                save_top_k=2,
+                                                save_last =True
+                                                )
+                                        swa = StochasticWeightAveraging(swa_lrs=1e-8,
+                                                                        annealing_epochs=35,
+                                                                        swa_epoch_start=185,
+                                                                        )
+                                        callbacks = [val_ckeckpoint, lr_monitor, early_stopping, swa, RichModelSummary()] #, DeviceStatsMonitor()
+                                        profiler = PyTorchProfiler()
+                                        trainer = L.Trainer(enable_checkpointing=True, max_epochs=250, accelerator="gpu", callbacks=callbacks, logger=logger) #precision="16-mixed", 
+                                        #trainer = L.Trainer(enable_checkpointing=False, max_epochs=2, accelerator="cpu") #precision="16-mixed", 
 
-                        tuner = Tuner(trainer)
-                        lr_find_results = tuner.lr_find(model)
-                        fig = lr_find_results.plot(suggest=True)
-                        logger.experiment.add_figure("lr_find", fig)
-                        new_lr = lr_find_results.suggestion()
-                        model.hparams.lr = new_lr
+                                        tuner = Tuner(trainer)
+                                        lr_find_results = tuner.lr_find(model)
+                                        fig = lr_find_results.plot(suggest=True)
+                                        logger.experiment.add_figure("lr_find", fig)
+                                        new_lr = lr_find_results.suggestion()
+                                        model.hparams.lr = new_lr
 
-                        trainer.fit(model)
-                i += 1
+                                        trainer.fit(model)
+                                i += 1

@@ -10,17 +10,16 @@ from pytorch_lightning.loggers import TensorBoardLogger
 torch.set_float32_matmul_precision("high")
 
 
-
 hparams1 = {
-            "model_name": "FullCN_SizeTest",
+            "model_name": "FullCN_nPrune_02_nLayers",
             "in_dim" : 201,
-            "fc_dims": [(200,6)],
+            "fc_dims": [(200,3)],
             "dropout_in": 0.0,
             "dropout": 0.0,
             "with_batchnorm": False,
             "lr": 0.001584893192461114, #0.01,
             "batch_size": 128,
-            "train_path": "D:/data_test2.hdf5",
+            "train_path": "D:/data_batch2_nPrune.hdf5",
             "optimizer": "Adam",
             "activation": "ReLU",
             "SGD_weight_decay": 0.0,
@@ -30,37 +29,27 @@ hparams1 = {
             "loss": "MSE",
         }
 
-hparams0 = deepcopy(hparams1)
-hparams0["fc_dims"] = [(200,5)]
-
 hparams2 = deepcopy(hparams1)
-hparams2["fc_dims"] = [(200,7)]
-
+hparams2["fc_dims"] = [(200,4)]
 hparams3 = deepcopy(hparams1)
-hparams3["fc_dims"] = [(200,8)]
-
+hparams3["fc_dims"] = [(200,5)]
 hparams4 = deepcopy(hparams1)
-hparams4["fc_dims"] = [(200,9)]
-
+hparams4["fc_dims"] = [(200,6)]
 hparams5 = deepcopy(hparams1)
-hparams5["fc_dims"] = [(200,10)]
-
+hparams5["fc_dims"] = [(200,7)]
 hparams6 = deepcopy(hparams1)
-hparams6["fc_dims"] = [(200,11)]
-
+hparams6["fc_dims"] = [(200,8)]
 hparams7 = deepcopy(hparams1)
-hparams7["fc_dims"] = [(200,12)]
-
+hparams7["fc_dims"] = [(200,9)]
 hparams8 = deepcopy(hparams1)
-hparams8["fc_dims"] = [(200,13)]
-
-
-hparams_list = [hparams0, hparams1, hparams2, hparams3, hparams4, hparams5, hparams6, hparams7, hparams8]
+hparams8["fc_dims"] = [(200,10)]
+#TODO: REDO 35
+hparams_list = [hparams1, hparams2, hparams3, hparams4, hparams5, hparams6, hparams7, hparams8]
 i = 0
 if __name__ == "__main__":
-    for bs in [32768,4096,1024,128,256,512]: 
+    for bs in [4096, 2048, 1024, 256, 128, 64, 32, 16]: 
         for hparams in hparams_list:
-                if i > 23:
+                if i > 41:
                         hparams["batch_size"] = bs
                         model = SimpleFC_Lit(hparams) #FC_Split(hparams)
                         lr_monitor = LearningRateMonitor(logging_interval='step')
@@ -75,12 +64,13 @@ if __name__ == "__main__":
                                 save_top_k=10,
                                 save_last =True
                                 )
+                        
                         swa = StochasticWeightAveraging(swa_lrs=0.0001,
-                                                        swa_epoch_start=100,
+                                                        swa_epoch_start=50,
                                                         )
                         callbacks = [val_ckeckpoint, lr_monitor, early_stopping, swa, RichModelSummary()] #, DeviceStatsMonitor()
                         profiler = PyTorchProfiler()
-                        trainer = L.Trainer(enable_checkpointing=True, max_epochs=200, accelerator="gpu", callbacks=callbacks, logger=logger) #precision="16-mixed", 
+                        trainer = L.Trainer(enable_checkpointing=True, max_epochs=150, accelerator="gpu", callbacks=callbacks, logger=logger) #precision="16-mixed", 
                         #trainer = L.Trainer(enable_checkpointing=False, max_epochs=2, accelerator="cpu") #precision="16-mixed", 
 
                         tuner = Tuner(trainer)
