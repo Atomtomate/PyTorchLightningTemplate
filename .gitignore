@@ -168,3 +168,4 @@ lightning_logs
 events.*
 *.hdf5
 *.yaml
+debug_profile01/debug_profile01.ncu-proj

@@ -7,11 +7,14 @@ from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor, Ea
 from lightning.pytorch.profilers import PyTorchProfiler
 import torch
 from pytorch_lightning.loggers import TensorBoardLogger
+from pytorch_lightning.profilers import Profiler, PassThroughProfiler
+
+
 torch.set_float32_matmul_precision("high")
 
 
 hparams1 = {
-            "model_name": "TMP_01",
+            "model_name": "TMP_02",
             "in_dim" : 201,
             "fc_dims": [(200,3)],
             "dropout_in": 0.0,
@@ -48,19 +51,26 @@ if __name__ == "__main__":
                         save_last =True
                         )
                 
-                swa = StochasticWeightAveraging(swa_lrs=0.0001,
-                                                swa_epoch_start=50,
-                                                )
-                callbacks = [val_ckeckpoint, lr_monitor, early_stopping, swa, RichModelSummary()] #, DeviceStatsMonitor()
-                profiler = PyTorchProfiler()
-                trainer = L.Trainer(enable_checkpointing=True, max_epochs=150, accelerator="gpu", callbacks=callbacks, logger=logger) #precision="16-mixed", 
+
+                callbacks = [lr_monitor, RichModelSummary()] #, DeviceStatsMonitor()
+                profiler = PyTorchProfiler(activities=[torch.profiler.ProfilerActivity.CPU,torch.profiler.ProfilerActivity.CUDA,],
+                                           schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=1),
+                                           dirpath="g:/Codes/PyTorchLightningTemplate/lightning_logs/log/tmp_02",
+                                           filename="Prof",
+                                           on_trace_ready=torch.profiler.tensorboard_trace_handler('g:/Codes/PyTorchLightningTemplate/lightning_logs/log/tmp_02'),
+                                           record_shapes=True,
+                                           profile_memory=True, 
+                                           with_stack=True, 
+                                           with_flops=True, 
+                                           with_modules=True)
+                trainer = L.Trainer(enable_checkpointing=False, 
+                                    max_epochs=4, 
+                                    precision="64-true", #"16-mixed", / 32/32-true
+                                    devices=2, 
+                                    accelerator="auto",
+                                    callbacks=callbacks, logger=logger, profiler="simple") #precision="16-mixed", 
                 #trainer = L.Trainer(enable_checkpointing=False, max_epochs=2, accelerator="cpu") #precision="16-mixed", 
 
-                tuner = Tuner(trainer)
-                lr_find_results = tuner.lr_find(model)
-                fig = lr_find_results.plot(suggest=True)
-                logger.experiment.add_figure("lr_find", fig)
-                new_lr = lr_find_results.suggestion()
-                model.hparams.lr = new_lr
+
 
                 trainer.fit(model)

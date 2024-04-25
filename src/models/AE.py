@@ -4,14 +4,17 @@ import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 import lightning as L
 import h5py
+
+dtype_default = torch.float64 #64
+
 torch.set_float32_matmul_precision("highest")
-torch.set_default_dtype(torch.float64)
+torch.set_default_dtype(dtype_default)
 import numpy as np
 
 class CustomDataset(Dataset):
     def __init__(self, x: torch.Tensor, y: torch.Tensor) -> None:
-        self.x = x.clone().detach().to(dtype=torch.float64)#dtype=torch.float32)
-        self.y = y.clone().detach().to(dtype=torch.float64)#dtype=torch.float32)
+        self.x = x.clone().detach().to(dtype=dtype_default)
+        self.y = y.clone().detach().to(dtype=dtype_default)
         self.ylen = y.shape[1] // 2
 
     def __len__(self) -> int:
@@ -77,30 +80,34 @@ class AutoEncoder_01(L.LightningModule):
         # tracks current out dim while building network layer-wise
         self.out_dim = self.in_dim
 
-        def linear_block(Nout, last_layer=False):
+        def linear_block(Nout, i, last_layer=False):
             res = [
                 self.dropout_in if i == 0 else self.dropout,
                 nn.Linear(self.out_dim, Nout),
                 nn.BatchNorm1d(Nout) if (not last_layer) and hparams["with_batchnorm"] else nn.Identity(),
                 self.activation if (not last_layer) else nn.Identity() 
             ]
-            self.out_dim = Nout
             return res
             
         ae_step_size =  (self.in_dim - self.latent_dim) // self.n_layers
         bl_encoder = []
         for i in range(self.n_layers):
             if i == self.n_layers - 1:
-                bl_encoder.extend(linear_block(self.latent_dim, last_layer = True))
+                bl_encoder.extend(linear_block(self.latent_dim, i, last_layer = True))
+                self.out_dim = self.latent_dim
             else:
-                bl_encoder.extend(linear_block(self.out_dim - ae_step_size))
+                bl_encoder.extend(linear_block(self.out_dim - ae_step_size, i))
+                self.out_dim = self.out_dim - ae_step_size
 
         bl_decoder = []
         for i in range(self.n_layers):
             if i == self.n_layers - 1:
-                bl_decoder.extend(linear_block(self.in_dim, last_layer = True))
+                bl_decoder.extend(linear_block(self.in_dim, i, last_layer = True))
+                self.out_dim = self.in_dim
             else:
-                bl_decoder.extend(linear_block(self.out_dim + ae_step_size))
+                bl_decoder.extend(linear_block(self.out_dim + ae_step_size, i))
+                self.out_dim = self.out_dim + ae_step_size
+
         self.encoder = nn.Sequential(*bl_encoder) #nn.ModuleList()
         self.decoder = nn.Sequential(*bl_decoder) #nn.ModuleList()
 
@@ -147,13 +154,18 @@ class AutoEncoder_01(L.LightningModule):
                                     weight_decay=self.hparams["SGD_weight_decay"],
                                     dampening=self.hparams["SGD_dampening"],
                                     nesterov=self.hparams["SGD_nesterov"])
+        elif self.hparams["optimizer"] == "RMSprop":
+            optimizer = torch.optim.RMSprop(self.parameters(), lr=self.lr,
+                        momentum=self.hparams["SGD_momentum"],
+                        weight_decay=self.hparams["SGD_weight_decay"],
+                        alpha=self.hparams["RMSprop_alpha"])
         
         elif self.hparams["optimizer"] == "AdamW":
             optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
         elif self.hparams["optimizer"] == "Adam":
             optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
         else:
-            raise ValueError("unkown optimzer: " + self.hparams["optimzer"])
+            raise ValueError("unkown optimzer: " + self.hparams["optimizer"])
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.1, patience=10, verbose=True)
         return {"optimizer": optimizer, "lr_scheduler": scheduler, "monitor": "val_loss"}
 
@@ -171,8 +183,8 @@ class AutoEncoder_01(L.LightningModule):
         # convert from complex to two real numbers and then concatenate
 
         # split data using pytorch lightning
-        x = torch.tensor(x, dtype=torch.float64) #dtype=torch.float32)
-        y = torch.tensor(y, dtype=torch.float64) #dtype=torch.float32)
+        x = torch.tensor(x, dtype=dtype_default)
+        y = torch.tensor(y, dtype=dtype_default)
         n = x.shape[0]
         n_train = int(n * 0.8)
         n_val = int(n * 0.1)
@@ -191,14 +203,12 @@ class AutoEncoder_01(L.LightningModule):
 
     def train_dataloader(self) -> DataLoader:
         """Return train dataloader"""
-        return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=8, persistent_workers=True)
+        return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=8, persistent_workers=True, pin_memory=True)
 
     def val_dataloader(self) -> DataLoader:
         """Return val dataloader"""
-        return DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=8, persistent_workers=True)
+        return DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=8, persistent_workers=True, pin_memory=True)
 
     def test_dataloader(self) -> DataLoader:
         """Return test dataloader"""
-        return DataLoader(self.test_dataset, batch_size=self.batch_size, num_workers=8, persistent_workers=True)
-
-
+        return DataLoader(self.test_dataset, batch_size=self.batch_size, num_workers=8, persistent_workers=True, pin_memory=True)
